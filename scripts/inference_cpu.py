@@ -30,10 +30,19 @@ def main(config, args):
     if not os.path.exists(args.audio_path):
         raise RuntimeError(f"Audio path '{args.audio_path}' not found")
 
-    # Check if the GPU supports float16
-    is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
-    dtype = torch.float16 if is_fp16_supported else torch.float32
+    # Determine device
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.float16 if torch.cuda.get_device_capability()[0] > 7 else torch.float32
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        dtype = torch.float32  # MPS doesn't support float16 well
+    else:
+        device = "cpu"
+        dtype = torch.float32
 
+    print(f"Using device: {device}")
+    print(f"Using dtype: {dtype}")
     print(f"Input video path: {args.video_path}")
     print(f"Input audio path: {args.audio_path}")
     print(f"Loaded checkpoint path: {args.inference_ckpt_path}")
@@ -49,7 +58,7 @@ def main(config, args):
 
     audio_encoder = Audio2Feature(
         model_path=whisper_model_path,
-        device="cuda",
+        device=device,
         num_frames=config.data.num_frames,
         audio_feat_length=config.data.audio_feat_length,
     )
@@ -71,10 +80,10 @@ def main(config, args):
         audio_encoder=audio_encoder,
         unet=unet,
         scheduler=scheduler,
-    ).to("cuda")
+    ).to(device)
 
     # use DeepCache
-    if args.enable_deepcache:
+    if args.enable_deepcache and device != "cpu":
         helper = DeepCacheSDHelper(pipe=pipeline)
         helper.set_params(cache_interval=3, cache_branch_id=0)
         helper.enable()
@@ -86,7 +95,7 @@ def main(config, args):
 
     print(f"Initial seed: {torch.initial_seed()}")
 
-    end_position_info = pipeline(
+    pipeline(
         video_path=args.video_path,
         audio_path=args.audio_path,
         video_out_path=args.video_out_path,
@@ -97,28 +106,24 @@ def main(config, args):
         width=config.data.resolution,
         height=config.data.resolution,
         mask_image_path=config.data.mask_image_path,
-        temp_dir=args.temp_dir,
-        start_time=args.start_time if hasattr(args, 'start_time') else None,
     )
-    
-    print(f"End position info: {end_position_info}")
+
+    print("The video is generated at", args.video_out_path)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--unet_config_path", type=str, default="configs/unet.yaml")
+    parser.add_argument("--unet_config_path", type=str, default="configs/unet/stage2_512.yaml")
     parser.add_argument("--inference_ckpt_path", type=str, required=True)
     parser.add_argument("--video_path", type=str, required=True)
     parser.add_argument("--audio_path", type=str, required=True)
     parser.add_argument("--video_out_path", type=str, required=True)
     parser.add_argument("--inference_steps", type=int, default=20)
-    parser.add_argument("--guidance_scale", type=float, default=1.0)
-    parser.add_argument("--temp_dir", type=str, default="temp")
-    parser.add_argument("--seed", type=int, default=1247)
+    parser.add_argument("--guidance_scale", type=float, default=1.5)
+    parser.add_argument("--temp_dir", type=str, default="temp_out")
+    parser.add_argument("--seed", type=int, default=-1)
     parser.add_argument("--enable_deepcache", action="store_true")
-    parser.add_argument("--start_time", type=float, default=None, help="Start time in seconds for the driving video")
+
     args = parser.parse_args()
-
     config = OmegaConf.load(args.unet_config_path)
-
     main(config, args)

@@ -38,6 +38,7 @@ class Predictor(BasePredictor):
         guidance_scale: float = Input(description="Guidance scale", ge=1, le=3, default=2.0),
         inference_steps: int = Input(description="Inference steps", ge=20, le=50, default=20),
         seed: int = Input(description="Set to 0 for Random seed", default=0),
+        start_time: float = Input(description="Start time in seconds for the driving video", ge=0, default=0),
     ) -> Path:
         """Run a single prediction on the model"""
         if seed <= 0:
@@ -51,7 +52,8 @@ class Predictor(BasePredictor):
         output_path = "/tmp/video_out.mp4"
 
         # Run the following command:
-        os.system(
-            f"python -m scripts.inference --unet_config_path {config_path} --inference_ckpt_path {ckpt_path} --guidance_scale {str(guidance_scale)} --video_path {video_path} --audio_path {audio_path} --video_out_path {output_path} --seed {seed} --inference_steps {inference_steps}"
-        )
+        cmd = f"python -m scripts.inference --unet_config_path {config_path} --inference_ckpt_path {ckpt_path} --guidance_scale {str(guidance_scale)} --video_path {video_path} --audio_path {audio_path} --video_out_path {output_path} --seed {seed} --inference_steps {inference_steps}"
+        if start_time > 0:
+            cmd += f" --start_time {start_time}"
+        os.system(cmd)
         return Path(output_path)

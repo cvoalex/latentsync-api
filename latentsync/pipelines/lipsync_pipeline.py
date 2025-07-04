@@ -280,9 +280,12 @@ class LipsyncPipeline(DiffusionPipeline):
 
     def loop_video(self, whisper_chunks: list, video_frames: np.ndarray):
         # If the audio is longer than the video, we need to loop the video
-        if len(whisper_chunks) > len(video_frames):
+        original_video_length = len(video_frames)
+        total_frames_needed = len(whisper_chunks)
+        
+        if total_frames_needed > original_video_length:
             faces, boxes, affine_matrices = self.affine_transform_video(video_frames)
-            num_loops = math.ceil(len(whisper_chunks) / len(video_frames))
+            num_loops = math.ceil(total_frames_needed / original_video_length)
             loop_video_frames = []
             loop_faces = []
             loop_boxes = []
@@ -299,15 +302,36 @@ class LipsyncPipeline(DiffusionPipeline):
                     loop_boxes += boxes[::-1]
                     loop_affine_matrices += affine_matrices[::-1]
 
-            video_frames = np.concatenate(loop_video_frames, axis=0)[: len(whisper_chunks)]
-            faces = torch.cat(loop_faces, dim=0)[: len(whisper_chunks)]
-            boxes = loop_boxes[: len(whisper_chunks)]
-            affine_matrices = loop_affine_matrices[: len(whisper_chunks)]
+            video_frames = np.concatenate(loop_video_frames, axis=0)[: total_frames_needed]
+            faces = torch.cat(loop_faces, dim=0)[: total_frames_needed]
+            boxes = loop_boxes[: total_frames_needed]
+            affine_matrices = loop_affine_matrices[: total_frames_needed]
         else:
-            video_frames = video_frames[: len(whisper_chunks)]
+            video_frames = video_frames[: total_frames_needed]
             faces, boxes, affine_matrices = self.affine_transform_video(video_frames)
 
-        return video_frames, faces, boxes, affine_matrices
+        # Calculate end position in original video
+        final_frame_idx = total_frames_needed - 1
+        loop_iteration = final_frame_idx // original_video_length
+        position_in_loop = final_frame_idx % original_video_length
+        
+        # Determine if we're in forward or backward playback
+        is_backward = (loop_iteration % 2) == 1
+        
+        if is_backward:
+            end_frame_in_original = original_video_length - 1 - position_in_loop
+        else:
+            end_frame_in_original = position_in_loop
+            
+        end_position_info = {
+            'end_frame': end_frame_in_original,
+            'loop_count': loop_iteration,
+            'is_backward': is_backward,
+            'total_frames_processed': total_frames_needed,
+            'original_video_length': original_video_length
+        }
+
+        return video_frames, faces, boxes, affine_matrices, end_position_info
 
     @torch.no_grad()
     def __call__(
@@ -329,6 +353,7 @@ class LipsyncPipeline(DiffusionPipeline):
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
+        start_time: Optional[float] = None,
         **kwargs,
     ):
         is_train = self.unet.training
@@ -339,7 +364,7 @@ class LipsyncPipeline(DiffusionPipeline):
         # 0. Define call parameters
         device = self._execution_device
         mask_image = load_fixed_mask(height, mask_image_path)
-        self.image_processor = ImageProcessor(height, device="cuda", mask_image=mask_image)
+        self.image_processor = ImageProcessor(height, device=device, mask_image=mask_image)
         self.set_progress_bar_config(desc=f"Sample frames: {num_frames}")
 
         # 1. Default height and width to unet
@@ -365,9 +390,9 @@ class LipsyncPipeline(DiffusionPipeline):
         whisper_chunks = self.audio_encoder.feature2chunks(feature_array=whisper_feature, fps=video_fps)
 
         audio_samples = read_audio(audio_path)
-        video_frames = read_video(video_path, use_decord=False)
+        video_frames = read_video(video_path, use_decord=False, start_time=start_time)
 
-        video_frames, faces, boxes, affine_matrices = self.loop_video(whisper_chunks, video_frames)
+        video_frames, faces, boxes, affine_matrices, end_position_info = self.loop_video(whisper_chunks, video_frames)
 
         synced_video_frames = []
 
@@ -475,3 +500,15 @@ class LipsyncPipeline(DiffusionPipeline):
 
         command = f"ffmpeg -y -loglevel error -nostdin -i {os.path.join(temp_dir, 'video.mp4')} -i {os.path.join(temp_dir, 'audio.wav')} -c:v libx264 -crf 18 -c:a aac -q:v 0 -q:a 0 {video_out_path}"
         subprocess.run(command, shell=True)
+        
+        # Calculate end time in seconds
+        end_position_info['end_time'] = end_position_info['end_frame'] / video_fps
+        
+        # Add start_time to get the actual position in the original video
+        if start_time is not None:
+            end_position_info['end_time'] += start_time
+            end_position_info['start_time'] = start_time
+        else:
+            end_position_info['start_time'] = 0.0
+            
+        return end_position_info

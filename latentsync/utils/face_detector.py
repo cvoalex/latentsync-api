@@ -7,12 +7,28 @@ INSIGHTFACE_DETECT_SIZE = 512
 
 class FaceDetector:
     def __init__(self, device="cuda"):
+        # Convert to string if it's a torch.device object
+        if isinstance(device, torch.device):
+            device_str = str(device)
+        else:
+            device_str = device
+            
+        # Determine the appropriate provider based on device
+        if device_str == "cuda" or device_str.startswith("cuda:"):
+            providers = ["CUDAExecutionProvider"]
+        elif device_str == "mps":
+            providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        else:
+            providers = ["CPUExecutionProvider"]
+            
         self.app = FaceAnalysis(
             allowed_modules=["detection", "landmark_2d_106"],
             root="checkpoints/auxiliary",
-            providers=["CUDAExecutionProvider"],
+            providers=providers,
         )
-        self.app.prepare(ctx_id=cuda_to_int(device), det_size=(INSIGHTFACE_DETECT_SIZE, INSIGHTFACE_DETECT_SIZE))
+        # For non-CUDA devices, use ctx_id=0
+        ctx_id = cuda_to_int(device_str) if device_str.startswith("cuda") else 0
+        self.app.prepare(ctx_id=ctx_id, det_size=(INSIGHTFACE_DETECT_SIZE, INSIGHTFACE_DETECT_SIZE))
 
     def __call__(self, frame, threshold=0.5):
         f_h, f_w, _ = frame.shape

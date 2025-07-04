@@ -28,7 +28,13 @@ from torchvision import transforms
 
 from einops import rearrange
 import cv2
-from decord import AudioReader, VideoReader
+# from decord import AudioReader, VideoReader
+try:
+    from decord import AudioReader, VideoReader
+    DECORD_AVAILABLE = True
+except ImportError:
+    DECORD_AVAILABLE = False
+    import soundfile as sf
 import shutil
 import subprocess
 
@@ -37,13 +43,60 @@ import subprocess
 eps = np.finfo(np.float32).eps
 
 
+def apply_start_time_with_loop_margin(frames: np.ndarray, start_time: float, fps: int = 25):
+    """
+    Pre-loops the video and crops from start_time to ensure enough margin for audio syncing.
+    
+    Args:
+        frames: Video frames array
+        start_time: Start time in seconds
+        fps: Frames per second
+    
+    Returns:
+        Cropped frames starting from start_time with pre-looped margin
+    """
+    total_frames = len(frames)
+    start_frame = int(start_time * fps)
+    
+    # If start_time is beyond video length, return empty
+    if start_frame >= total_frames:
+        return np.array([])
+    
+    # Calculate how many loops we need before the start point
+    # We'll do at least one forward-backward cycle before the start point
+    frames_before_start = start_frame
+    frames_after_start = total_frames - start_frame
+    
+    # Create looped video with margin
+    looped_frames = []
+    
+    # If we have enough frames before start, add one backward-forward cycle
+    if frames_before_start > 0:
+        # Add forward pass up to start
+        looped_frames.extend(frames[:start_frame])
+        # Add backward pass from start back to beginning
+        looped_frames.extend(frames[:start_frame][::-1])
+    
+    # Add the main content from start_time onwards
+    looped_frames.extend(frames[start_frame:])
+    
+    # If the remaining video is short, add more loops
+    if frames_after_start < total_frames:
+        # Add backward pass of remaining frames
+        looped_frames.extend(frames[start_frame:][::-1])
+        # Add forward pass again
+        looped_frames.extend(frames[start_frame:])
+    
+    return np.array(looped_frames)
+
+
 def read_json(filepath: str):
     with open(filepath) as f:
         json_dict = json.load(f)
     return json_dict
 
 
-def read_video(video_path: str, change_fps=True, use_decord=True):
+def read_video(video_path: str, change_fps=True, use_decord=True, start_time=None):
     if change_fps:
         temp_dir = "temp"
         if os.path.exists(temp_dir):
@@ -58,16 +111,26 @@ def read_video(video_path: str, change_fps=True, use_decord=True):
         target_video_path = video_path
 
     if use_decord:
-        return read_video_decord(target_video_path)
+        frames = read_video_decord(target_video_path)
     else:
-        return read_video_cv2(target_video_path)
+        frames = read_video_cv2(target_video_path)
+    
+    # If start_time is provided, pre-loop the video and crop
+    if start_time is not None and start_time > 0:
+        frames = apply_start_time_with_loop_margin(frames, start_time, fps=25)
+    
+    return frames
 
 
 def read_video_decord(video_path: str):
-    vr = VideoReader(video_path)
-    video_frames = vr[:].asnumpy()
-    vr.seek(0)
-    return video_frames
+    if DECORD_AVAILABLE:
+        vr = VideoReader(video_path)
+        video_frames = vr[:].asnumpy()
+        vr.seek(0)
+        return video_frames
+    else:
+        # Fallback to cv2
+        return read_video_cv2(video_path)
 
 
 def read_video_cv2(video_path: str):
@@ -103,11 +166,23 @@ def read_video_cv2(video_path: str):
 def read_audio(audio_path: str, audio_sample_rate: int = 16000):
     if audio_path is None:
         raise ValueError("Audio path is required.")
-    ar = AudioReader(audio_path, sample_rate=audio_sample_rate, mono=True)
-
-    # To access the audio samples
-    audio_samples = torch.from_numpy(ar[:].asnumpy())
-    audio_samples = audio_samples.squeeze(0)
+    
+    if DECORD_AVAILABLE:
+        ar = AudioReader(audio_path, sample_rate=audio_sample_rate, mono=True)
+        # To access the audio samples
+        audio_samples = torch.from_numpy(ar[:].asnumpy())
+        audio_samples = audio_samples.squeeze(0)
+    else:
+        # Use soundfile as fallback
+        audio_samples, sr = sf.read(audio_path)
+        if sr != audio_sample_rate:
+            # Resample if necessary (simple method, for better quality use librosa)
+            import librosa
+            audio_samples = librosa.resample(audio_samples, orig_sr=sr, target_sr=audio_sample_rate)
+        if len(audio_samples.shape) > 1:
+            # Convert to mono if stereo
+            audio_samples = audio_samples.mean(axis=1)
+        audio_samples = torch.from_numpy(audio_samples).float()
 
     return audio_samples
 
@@ -271,7 +346,8 @@ def check_ffmpeg_installed():
     # Run the ffmpeg command with the -version argument to check if it's installed
     result = subprocess.run("ffmpeg -version", stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     if not result.returncode == 0:
-        raise FileNotFoundError("ffmpeg not found, please install it by:\n    $ conda install -c conda-forge ffmpeg")
+        print("WARNING: ffmpeg not found. Some functionality may not work properly.")
+        # raise FileNotFoundError("ffmpeg not found, please install it by:\n    $ conda install -c conda-forge ffmpeg")
 
 
 def check_model_and_download(ckpt_path: str, huggingface_model_id: str = "ByteDance/LatentSync-1.5"):

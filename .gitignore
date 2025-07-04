@@ -28,6 +28,32 @@ wandb/
 
 # checkpoint files
 *.safetensors
+*.pt
+*.onnx
+*.zip
+
+# Video and audio files
+*.mp4
+*.wav
+*.avi
+*.mov
+
+# Service files
+*.log
+*.pid
+
+# Environment
+venv/
+.env
+.env.*
+
+# Archive files
+Archive.zip
+*.tar.gz
+
+# Temp files
+temp/
+video_out.mp4
 *.ckpt
 *.pt
 

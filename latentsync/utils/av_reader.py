@@ -2,12 +2,18 @@
 # For more details, refer to: https://github.com/dmlc/decord/issues/208
 
 import numpy as np
-from decord.video_reader import VideoReader
-from decord.audio_reader import AudioReader
-
-from decord.ndarray import cpu
-from decord import ndarray as _nd
-from decord.bridge import bridge_out
+try:
+    from decord.video_reader import VideoReader
+    from decord.audio_reader import AudioReader
+    from decord.ndarray import cpu
+    from decord import ndarray as _nd
+    from decord.bridge import bridge_out
+    DECORD_AVAILABLE = True
+except ImportError:
+    DECORD_AVAILABLE = False
+    # Placeholder for cpu function
+    def cpu(idx=0):
+        return None
 
 
 class AVReader(object):

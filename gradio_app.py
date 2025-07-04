@@ -15,6 +15,7 @@ def process_video(
     guidance_scale,
     inference_steps,
     seed,
+    start_time,
 ):
     # Create the temp directory if it doesn't exist
     output_dir = Path("./temp")
@@ -39,7 +40,7 @@ def process_video(
     )
 
     # Parse the arguments
-    args = create_args(video_path, audio_path, output_path, inference_steps, guidance_scale, seed)
+    args = create_args(video_path, audio_path, output_path, inference_steps, guidance_scale, seed, start_time)
 
     try:
         result = main(
@@ -54,7 +55,7 @@ def process_video(
 
 
 def create_args(
-    video_path: str, audio_path: str, output_path: str, inference_steps: int, guidance_scale: float, seed: int
+    video_path: str, audio_path: str, output_path: str, inference_steps: int, guidance_scale: float, seed: int, start_time: float = None
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inference_ckpt_path", type=str, required=True)
@@ -66,28 +67,32 @@ def create_args(
     parser.add_argument("--temp_dir", type=str, default="temp")
     parser.add_argument("--seed", type=int, default=1247)
     parser.add_argument("--enable_deepcache", action="store_true")
+    parser.add_argument("--start_time", type=float, default=None, help="Start time in seconds for the driving video")
 
-    return parser.parse_args(
-        [
-            "--inference_ckpt_path",
-            CHECKPOINT_PATH.absolute().as_posix(),
-            "--video_path",
-            video_path,
-            "--audio_path",
-            audio_path,
-            "--video_out_path",
-            output_path,
-            "--inference_steps",
-            str(inference_steps),
-            "--guidance_scale",
-            str(guidance_scale),
-            "--seed",
-            str(seed),
-            "--temp_dir",
-            "temp",
-            "--enable_deepcache",
-        ]
-    )
+    args_list = [
+        "--inference_ckpt_path",
+        CHECKPOINT_PATH.absolute().as_posix(),
+        "--video_path",
+        video_path,
+        "--audio_path",
+        audio_path,
+        "--video_out_path",
+        output_path,
+        "--inference_steps",
+        str(inference_steps),
+        "--guidance_scale",
+        str(guidance_scale),
+        "--seed",
+        str(seed),
+        "--temp_dir",
+        "temp",
+        "--enable_deepcache",
+    ]
+    
+    if start_time is not None:
+        args_list.extend(["--start_time", str(start_time)])
+    
+    return parser.parse_args(args_list)
 
 
 # Create Gradio interface
@@ -124,6 +129,7 @@ with gr.Blocks(title="LatentSync demo") as demo:
 
             with gr.Row():
                 seed = gr.Number(value=1247, label="Random Seed", precision=0)
+                start_time = gr.Number(value=0.0, label="Start Time (seconds)", precision=1, minimum=0.0)
 
             process_btn = gr.Button("Process Video")
 
@@ -147,6 +153,7 @@ with gr.Blocks(title="LatentSync demo") as demo:
             guidance_scale,
             inference_steps,
             seed,
+            start_time,
         ],
         outputs=video_output,
     )

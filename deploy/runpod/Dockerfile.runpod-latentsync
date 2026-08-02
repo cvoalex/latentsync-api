@@ -1,0 +1,52 @@
+# RunPod serverless worker image for LatentSync 1.6 (lipsync a video to audio).
+#
+# Built FROM THIS REPO (the staging dir contains a checkout at LatentSync/),
+# so the model code is pinned to this fork — no moving-target upstream clone.
+# ubuntu:22.04 because its system python IS 3.10, matching upstream's
+# conda python=3.10.13.
+#
+# ⚠️ The pinned torch 2.5.1+cu121 has no sm_120 kernels — the serverless
+# endpoint must NOT include Blackwell pools (use Ada/Ampere/Hopper).
+# Revisit when bumping torch.
+#
+# Checkpoints are NOT in the image: /opt/LatentSync/checkpoints symlinks to
+# the network volume; seed once via a {"seed_weights": true} job (the worker
+# itself has the volume mounted — no throwaway pod needed). HOME also points
+# at the volume so insightface/face-alignment/torch-hub aux models fetched on
+# first run persist for every later worker.
+#
+# Deploy NEW versions under a VERSIONED TAG (:v1, :v2, …) — workers silently
+# reuse a cached :latest.
+
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip ffmpeg libgl1 libglib2.0-0 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# deps first (cache-friendly): gradio stripped — it's the demo UI only, and
+# its pin fights the runpod SDK's fastapi/pydantic needs.
+COPY LatentSync/requirements.txt /tmp/requirements.txt
+RUN sed -i '/^gradio/d' /tmp/requirements.txt \
+    && pip3 install --no-cache-dir -r /tmp/requirements.txt \
+        --extra-index-url https://download.pytorch.org/whl/cu121 \
+    && pip3 install --no-cache-dir runpod boto3 \
+    && python3 -c "import torch; assert torch.__version__.startswith('2.5.1'), torch.__version__; \
+import diffusers, transformers, mediapipe, decord, huggingface_hub; \
+assert huggingface_hub.__version__.startswith('0.30'), huggingface_hub.__version__; \
+print('preflight ok: torch', torch.__version__)"
+
+COPY LatentSync/ /opt/LatentSync/
+COPY handler.py /opt/handler.py
+
+RUN mkdir -p /runpod-volume && \
+    rm -rf /opt/LatentSync/checkpoints && \
+    ln -s /runpod-volume/weights/latentsync/checkpoints /opt/LatentSync/checkpoints
+
+ENV HOME=/runpod-volume/weights/latentsync/home \
+    TORCH_HOME=/runpod-volume/weights/latentsync/home/.cache/torch \
+    HF_HOME=/runpod-volume/weights/latentsync/home/.cache/huggingface \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /opt/LatentSync
+CMD ["python3", "-u", "/opt/handler.py"]

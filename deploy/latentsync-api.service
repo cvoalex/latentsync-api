@@ -1,0 +1,18 @@
+[Unit]
+Description=LatentSync 1.6 lipsync API (RunPod dispatcher, port 8208)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fonworx
+Group=fonworx
+WorkingDirectory=/data/latentsync-api
+EnvironmentFile=/data/latentsync-api/.env
+ExecStart=/data/latentsync-api/.venv/bin/python -m uvicorn api.server:app --host 0.0.0.0 --port 8208 --log-level info
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
